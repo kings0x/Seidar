@@ -13,12 +13,9 @@
 //!     → Compile matchers (prefix trees, exact maps)
 //!     → Freeze as immutable Router
 //! ```
-//!
-//! # Design Decisions
-//! - Routes compiled at startup, immutable at runtime
-//! - No regex in hot path (prefix matching only)
-//! - Deterministic: same input always matches same route
-//! - First match wins (ordered by priority)
 
 pub mod matcher;
 pub mod router;
+
+pub use router::Router;
+pub use matcher::Matcher;

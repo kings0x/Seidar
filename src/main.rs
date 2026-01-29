@@ -39,23 +39,14 @@
 //!                              └─────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Module Hierarchy
+//! # Phase 1 Status
 //!
-//! - [`config`] - Configuration loading, validation, and hot reload
-//! - [`net`] - TCP/TLS listener and connection management
-//! - [`http`] - HTTP/1.1, HTTP/2, and WebSocket handling
-//! - [`routing`] - Request routing to backend groups
-//! - [`load_balancer`] - Backend selection and connection pooling
-//! - [`health`] - Active and passive health checking
-//! - [`observability`] - Logging, metrics, and tracing
-//! - [`resilience`] - Timeouts, retries, and circuit breakers
-//! - [`security`] - Rate limiting, headers, and input validation
-//! - [`lifecycle`] - Startup, shutdown, and signal handling
-//!
-//! # Phase 0 Status
-//!
-//! This is the skeleton implementation. All modules contain documentation
-//! describing their responsibilities and design decisions, but no business logic.
+//! Implements network foundation:
+//! - TCP listener with connection limits
+//! - HTTP/1.1 and HTTP/2 via Axum
+//! - Request ID generation (UUID v4)
+//! - Request timeout and body limits
+//! - Echo handler (no routing yet)
 
 // Core subsystems
 pub mod config;
@@ -73,19 +64,48 @@ pub mod observability;
 pub mod resilience;
 pub mod security;
 
-fn main() {
-    // TODO: Phase 1+ implementation
-    //
-    // Startup sequence:
-    // 1. Parse command-line arguments
-    // 2. Load and validate configuration
-    // 3. Initialize observability (logging, metrics)
-    // 4. Initialize backend pools
-    // 5. Start health check tasks
-    // 6. Bind listeners
-    // 7. Run until shutdown signal
-    // 8. Graceful shutdown
+use tokio::net::TcpListener;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-    println!("reverse-proxy v0.1.0 - Phase 0 skeleton");
-    println!("Run `cargo doc --open` to view module documentation.");
+use crate::config::ProxyConfig;
+use crate::http::HttpServer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing subscriber
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "reverse_proxy=debug,tower_http=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    tracing::info!("reverse-proxy v0.1.0 starting");
+
+    // Load configuration (using defaults for Phase 1)
+    let config = ProxyConfig::default();
+
+    tracing::info!(
+        bind_address = %config.listener.bind_address,
+        max_connections = config.listener.max_connections,
+        request_timeout_secs = config.timeouts.request_secs,
+        "Configuration loaded"
+    );
+
+    // Bind TCP listener
+    let listener = TcpListener::bind(&config.listener.bind_address).await?;
+    let local_addr = listener.local_addr()?;
+
+    tracing::info!(
+        address = %local_addr,
+        "Listening for connections"
+    );
+
+    // Create and run HTTP server
+    let server = HttpServer::new(config);
+    server.run(listener).await?;
+
+    tracing::info!("Shutdown complete");
+    Ok(())
 }

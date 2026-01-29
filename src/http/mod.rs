@@ -5,22 +5,16 @@
 //! TCP/TLS connection
 //!     → server.rs (Axum setup, protocol detection)
 //!     → request.rs (parse, add request ID, validate headers)
-//!     → [routing layer decides backend]
-//!     → [load balancer picks server]
+//!     → [routing layer decides backend] (Phase 2+)
+//!     → [load balancer picks server] (Phase 3+)
 //!     → response.rs (transform, add headers)
 //!     → Send to client
-//!
-//! WebSocket upgrade:
-//!     → request.rs detects Upgrade header
-//!     → websocket.rs handles bidirectional proxy
 //! ```
-//!
-//! # Design Decisions
-//! - HTTP/1.1 and HTTP/2 supported via Axum/hyper
-//! - Request size limits enforced before full parse
-//! - Request ID generated for every request (correlation)
 
 pub mod request;
 pub mod response;
 pub mod server;
 pub mod websocket;
+
+pub use request::{RequestId, RequestIdExt, RequestIdLayer, X_REQUEST_ID};
+pub use server::HttpServer;
