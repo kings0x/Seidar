@@ -2,16 +2,11 @@
 //!
 //! This module defines the complete configuration structure for the proxy.
 //! All types derive Serde traits for deserialization from config files.
-//!
-//! # Design Decisions
-//! - All fields use `Option` or `Vec` with `#[serde(default)]` for flexibility
-//! - Durations stored as seconds (u64) to avoid serde complexity
-//! - No validation logic here; that belongs in `validation.rs`
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Root configuration for the reverse proxy.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct ProxyConfig {
     /// Listener configuration (bind address, TLS).
@@ -40,7 +35,7 @@ pub struct ProxyConfig {
 }
 
 /// Listener configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ListenerConfig {
     /// Bind address (e.g., "0.0.0.0:8080").
@@ -64,7 +59,7 @@ impl Default for ListenerConfig {
 }
 
 /// TLS configuration for the listener.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TlsConfig {
     /// Path to certificate file (PEM).
     pub cert_path: String,
@@ -74,7 +69,7 @@ pub struct TlsConfig {
 }
 
 /// Route configuration mapping requests to backend groups.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RouteConfig {
     /// Route identifier for logging/metrics.
     pub name: String,
@@ -94,7 +89,7 @@ pub struct RouteConfig {
 }
 
 /// Backend server configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BackendConfig {
     /// Unique backend identifier.
     pub name: String,
@@ -123,7 +118,7 @@ fn default_max_backend_conns() -> usize {
 }
 
 /// Health check configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HealthCheckConfig {
     /// Enable active health checks.
@@ -159,7 +154,7 @@ impl Default for HealthCheckConfig {
 }
 
 /// Timeout configuration for various operations.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TimeoutConfig {
     /// Connection establishment timeout in seconds.
@@ -183,7 +178,7 @@ impl Default for TimeoutConfig {
 }
 
 /// Rate limiting configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RateLimitConfig {
     /// Enable rate limiting.
@@ -207,7 +202,7 @@ impl Default for RateLimitConfig {
 }
 
 /// Retry configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RetryConfig {
     /// Enable retries.
@@ -240,7 +235,7 @@ impl Default for RetryConfig {
 }
 
 /// Observability configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ObservabilityConfig {
     /// Log level (trace, debug, info, warn, error).

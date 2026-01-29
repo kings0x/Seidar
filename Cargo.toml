@@ -32,3 +32,9 @@ metrics-exporter-prometheus = "0.16"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls-pemfile = "2"
 
+# Configuration & Reload
+toml = "0.8"
+notify = "6"
+arc-swap = "1.7"
+
+
