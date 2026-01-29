@@ -1,7 +1,6 @@
 //! Retry logic and retry budget management.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use axum::http::{Method, StatusCode};
 
 /// A simple token-bucket-like retry budget.

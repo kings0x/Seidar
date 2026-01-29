@@ -15,6 +15,7 @@ use hyper_util::{
 };
 use axum::http::Request;
 use axum::body::Body;
+use crate::observability::metrics;
 
 pub struct HealthMonitor {
     backends: Arc<BackendManager>,
@@ -49,11 +50,6 @@ impl HealthMonitor {
         let interval = Duration::from_secs(self.config.interval_secs);
         let mut ticker = time::interval(interval);
         
-        // Consume the first immediate tick so we wait 'interval' before first check
-        // Or do we want immediate check? 
-        // Let's do immediate check first to discover initial status.
-        // So we just loop.
-        
         loop {
             ticker.tick().await; 
             self.check_all().await;
@@ -67,13 +63,12 @@ impl HealthMonitor {
             let addr = backend.addr; 
             let check_path = &self.config.path;
             
-            // Construct probe URI
-            // Assume HTTP for now
             let uri_string = format!("http://{}{}", addr, check_path);
             
             let request = match Request::builder()
                 .method("GET") 
                 .uri(uri_string)
+                .header("user-agent", "rust-proxy-health-check")
                 .body(Body::empty()) {
                     Ok(req) => req,
                     Err(e) => {
@@ -82,25 +77,24 @@ impl HealthMonitor {
                     }
                 };
 
-            // Enforce timeout
             let timeout = Duration::from_secs(self.config.timeout_secs);
             let response_future = self.client.request(request);
             
-            match time::timeout(timeout, response_future).await {
+            let healthy = match time::timeout(timeout, response_future).await {
                 Ok(Ok(response)) => {
-                    if response.status().is_success() {
-                        backend.mark_success(self.config.healthy_threshold as usize);
-                    } else {
-                        backend.mark_failure(self.config.unhealthy_threshold as usize);
-                    }
+                    response.status().is_success()
                 },
-                Ok(Err(_e)) => {
-                    backend.mark_failure(self.config.unhealthy_threshold as usize);
-                },
-                Err(_elapsed) => {
-                    backend.mark_failure(self.config.unhealthy_threshold as usize);
-                }
+                _ => false,
+            };
+
+            if healthy {
+                backend.mark_success(self.config.healthy_threshold as usize);
+            } else {
+                backend.mark_failure(self.config.unhealthy_threshold as usize);
             }
+
+            // Record health metric (Phase 6)
+            metrics::record_backend_health(&addr.to_string(), backend.is_healthy());
         }
     }
 }

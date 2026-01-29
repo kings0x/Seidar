@@ -25,4 +25,6 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.8"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
 

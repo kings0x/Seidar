@@ -102,6 +102,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Listening for connections"
     );
 
+    // Initialize metrics server (Phase 6)
+    if config.observability.metrics_enabled {
+        if let Ok(addr) = config.observability.metrics_address.parse() {
+            crate::observability::metrics::init_metrics(addr);
+        } else {
+            tracing::error!(
+                metrics_address = %config.observability.metrics_address,
+                "Failed to parse metrics address"
+            );
+        }
+    }
+
     // Create and run HTTP server
     let server = HttpServer::new(config);
     server.run(listener).await?;

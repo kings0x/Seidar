@@ -9,10 +9,11 @@
 //! - Forward requests to upstream backends
 //! - Health monitoring (active & passive)
 //! - Resilience (timeouts, retries)
+//! - Observability (metrics, correlation IDs)
 
 use axum::{
-    body::{Body, Bytes},
-    extract::{ConnectInfo, Extension, State},
+    body::Body,
+    extract::{ConnectInfo, State},
     http::{Method, Request, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::any,
@@ -26,20 +27,21 @@ use axum::http::uri::{Scheme, Authority};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tower_http::{
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
 
-use crate::config::{ProxyConfig, HealthCheckConfig, RetryConfig};
+use crate::config::{ProxyConfig, HealthCheckConfig, RetryConfig, ObservabilityConfig};
 use crate::http::request::RequestIdLayer;
 use crate::routing::Router as ProxyRouter;
 use crate::load_balancer::pool::BackendManager;
 use crate::health::active::HealthMonitor;
 use crate::resilience::retries::{RetryBudget, is_retryable};
 use crate::resilience::backoff::calculate_backoff;
+use crate::observability::metrics;
 
 /// Application state injected into handlers.
 #[derive(Clone)]
@@ -50,6 +52,7 @@ pub struct AppState {
     pub health_config: HealthCheckConfig,
     pub retry_config: RetryConfig,
     pub retry_budget: Arc<RetryBudget>,
+    pub observability_config: ObservabilityConfig,
 }
 
 /// HTTP server for the reverse proxy.
@@ -70,7 +73,7 @@ impl HttpServer {
         let client = Client::builder(TokioExecutor::new())
             .build(HttpConnector::new());
 
-        // Initialize Retry Budget (10% by default)
+        // Initialize Retry Budget (ratio from config)
         let retry_budget = Arc::new(RetryBudget::new(config.retries.budget_ratio, 100));
 
         let state = AppState {
@@ -80,6 +83,7 @@ impl HttpServer {
             health_config: config.health_check.clone(),
             retry_config: config.retries.clone(),
             retry_budget,
+            observability_config: config.observability.clone(),
         };
 
         let router = Self::build_router(&config, state);
@@ -146,6 +150,7 @@ async fn proxy_handler(
     ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     request: Request<Body>,
 ) -> impl IntoResponse {
+    let start_time = Instant::now();
     let request_id = request
         .headers()
         .get("x-request-id")
@@ -155,6 +160,7 @@ async fn proxy_handler(
 
     let path = request.uri().path().to_string();
     let method = request.method().clone();
+    let method_str = method.to_string();
 
     tracing::debug!(
         request_id = %request_id,
@@ -168,26 +174,22 @@ async fn proxy_handler(
         Some(r) => r,
         None => {
             tracing::warn!(request_id = %request_id, path = %path, "No route matched");
+            metrics::record_request(&method_str, 404, "none", start_time);
             return (StatusCode::NOT_FOUND, "No matching route found").into_response();
         }
     };
 
     // 2. Buffer Request Body if retriable
-    // For Phase 5, we only retry idempotent methods if body is small or empty.
-    // If it's a POST/PUT with a large body, we might not want to buffer it.
-    // Let's collect the body for all potentially retriable requests.
     let (parts, body) = request.into_parts();
     let body_bytes = if state.retry_config.enabled && method.is_idempotent() {
-        // Limit buffering to avoid OOM (e.g., 1MB)
         match axum::body::to_bytes(body, 1024 * 1024).await {
             Ok(bytes) => Some(bytes),
-            Err(_) => None, // Too large or error
+            Err(_) => None,
         }
     } else {
         None
     };
 
-    // Record this primary request in the budget
     state.retry_budget.record_request();
 
     // 3. Retry Loop
@@ -206,6 +208,7 @@ async fn proxy_handler(
             Some(g) => g,
             None => {
                 tracing::warn!(request_id = %request_id, group = %route.backend_group, "No healthy backends");
+                metrics::record_request(&method_str, 503, "none", start_time);
                 return (StatusCode::SERVICE_UNAVAILABLE, "No healthy backends").into_response();
             }
         };
@@ -215,11 +218,13 @@ async fn proxy_handler(
             .method(method.clone())
             .version(parts.version);
         
-        // Copy headers
+        // Copy headers and PROPRAGATE X-Request-ID (Phase 6)
         if let Some(headers) = req.headers_mut() {
             for (k, v) in parts.headers.iter() {
                 headers.insert(k.clone(), v.clone());
             }
+            // Ensure request ID is present (it should be due to layer, but let's be explicit)
+            headers.insert("x-request-id", header::HeaderValue::from_str(&request_id).unwrap());
         }
 
         // URI rewrite
@@ -229,12 +234,12 @@ async fn proxy_handler(
             uri_parts.authority = Some(authority);
         }
         let uri = Uri::from_parts(uri_parts).unwrap_or(parts.uri.clone());
+        let backend_addr_str = backend_guard.addr.to_string();
+        
         let req = req.uri(uri)
             .body(if let Some(ref bytes) = body_bytes {
                 Body::from(bytes.clone())
             } else {
-                // If we didn't buffer, we can only try once (unless it was already empty)
-                // If this is attempt > 1 and no body_bytes, we should have broken out.
                 Body::empty() 
             })
             .unwrap();
@@ -254,6 +259,9 @@ async fn proxy_handler(
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
+
+                // Metrics (Phase 6)
+                metrics::record_request(&method_str, status.as_u16(), &backend_addr_str, start_time);
 
                 // Passive Health Check update
                 if status.is_server_error() {
@@ -284,6 +292,9 @@ async fn proxy_handler(
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
+
+                // Metrics (Phase 6)
+                metrics::record_request(&method_str, 502, &backend_addr_str, start_time);
 
                 backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
                 return (StatusCode::BAD_GATEWAY, "Upstream request failed").into_response();
