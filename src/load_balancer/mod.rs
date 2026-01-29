@@ -10,14 +10,26 @@
 //!     → backend.rs (acquire connection from pool)
 //!     → Return backend connection or error
 //! ```
-//!
-//! # Design Decisions
-//! - Load balancer is stateless; backend pool tracks connections
-//! - Algorithm selection per backend group
-//! - Unhealthy backends excluded from selection
-//! - Connection pooling per backend for efficiency
 
 pub mod backend;
 pub mod least_conn;
+#[allow(dead_code)] // To be implemented/used
 pub mod pool;
 pub mod round_robin;
+
+use std::fmt::Debug;
+use std::sync::Arc;
+use backend::Backend;
+
+/// Interface for load balancing algorithms.
+pub trait LoadBalancer: Send + Sync + Debug {
+    /// Select the next backend from the list.
+    fn next_server(&self, backends: &[Arc<Backend>]) -> Option<Arc<Backend>>;
+}
+
+/// Available load balancing algorithms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadBalancerAlgo {
+    RoundRobin,
+    LeastConnections,
+}

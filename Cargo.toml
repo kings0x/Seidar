@@ -12,7 +12,7 @@ tokio = { version = "1", features = ["full"] }
 # HTTP framework
 axum = "0.8"
 hyper = { version = "1", features = ["full"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy", "http1", "http2"] }
 
 # Middleware
 tower = "0.5"
