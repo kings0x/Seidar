@@ -31,4 +31,5 @@ pub use schema::ListenerConfig;
 pub use schema::RouteConfig;
 pub use schema::BackendConfig;
 pub use schema::HealthCheckConfig;
+pub use schema::RetryConfig;
 

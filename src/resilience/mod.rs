@@ -17,3 +17,4 @@
 pub mod circuit_breaker;
 pub mod retries;
 pub mod timeouts;
+pub mod backoff;

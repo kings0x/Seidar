@@ -8,11 +8,12 @@
 //! - Dispatch requests to routing engine
 //! - Forward requests to upstream backends
 //! - Health monitoring (active & passive)
+//! - Resilience (timeouts, retries)
 
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{ConnectInfo, Extension, State},
-    http::{Method, Request, StatusCode, Uri},
+    http::{Method, Request, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::any,
     Router,
@@ -32,11 +33,13 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::config::{ProxyConfig, HealthCheckConfig};
+use crate::config::{ProxyConfig, HealthCheckConfig, RetryConfig};
 use crate::http::request::RequestIdLayer;
 use crate::routing::Router as ProxyRouter;
 use crate::load_balancer::pool::BackendManager;
 use crate::health::active::HealthMonitor;
+use crate::resilience::retries::{RetryBudget, is_retryable};
+use crate::resilience::backoff::calculate_backoff;
 
 /// Application state injected into handlers.
 #[derive(Clone)]
@@ -45,6 +48,8 @@ pub struct AppState {
     pub backends: Arc<BackendManager>,
     pub client: Client<HttpConnector, Body>,
     pub health_config: HealthCheckConfig,
+    pub retry_config: RetryConfig,
+    pub retry_budget: Arc<RetryBudget>,
 }
 
 /// HTTP server for the reverse proxy.
@@ -65,11 +70,16 @@ impl HttpServer {
         let client = Client::builder(TokioExecutor::new())
             .build(HttpConnector::new());
 
+        // Initialize Retry Budget (10% by default)
+        let retry_budget = Arc::new(RetryBudget::new(config.retries.budget_ratio, 100));
+
         let state = AppState {
             router: proxy_router,
             backends: backend_manager.clone(),
             client,
             health_config: config.health_check.clone(),
+            retry_config: config.retries.clone(),
+            retry_budget,
         };
 
         let router = Self::build_router(&config, state);
@@ -134,7 +144,7 @@ impl HttpServer {
 async fn proxy_handler(
     State(state): State<AppState>,
     ConnectInfo(_addr): ConnectInfo<SocketAddr>,
-    mut request: Request<Body>,
+    request: Request<Body>,
 ) -> impl IntoResponse {
     let request_id = request
         .headers()
@@ -144,87 +154,141 @@ async fn proxy_handler(
         .to_string();
 
     let path = request.uri().path().to_string();
+    let method = request.method().clone();
 
     tracing::debug!(
         request_id = %request_id,
+        method = %method,
         path = %path,
-        "Routing request"
+        "Proxying request"
     );
 
     // 1. Match Route
-    if let Some(route) = state.router.match_request(&request) {
-        // 2. Select Backend
-        if let Some(backend_guard) = state.backends.get(&route.backend_group) {
-            let backend_addr = backend_guard.addr;
-            
-            // 3. Rewrite URI
-            let mut parts = request.uri().clone().into_parts();
-            parts.scheme = Some(Scheme::HTTP); 
-            
-            if let Ok(authority) = Authority::from_str(&backend_addr.to_string()) {
-                parts.authority = Some(authority);
-            } else {
-                return (StatusCode::BAD_GATEWAY, "Invalid backend address").into_response();
-            }
+    let route = match state.router.match_request(&request) {
+        Some(r) => r,
+        None => {
+            tracing::warn!(request_id = %request_id, path = %path, "No route matched");
+            return (StatusCode::NOT_FOUND, "No matching route found").into_response();
+        }
+    };
 
-            if parts.path_and_query.is_none() {
-                 parts.path_and_query = Some(axum::http::uri::PathAndQuery::from_static("/"));
-            }
-
-            if let Ok(new_uri) = Uri::from_parts(parts) {
-                *request.uri_mut() = new_uri;
-            } else {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "URI rewrite failed").into_response();
-            }
-
-            // 4. Forward Request
-            match state.client.request(request).await {
-                Ok(response) => {
-                    // Passive Health Check: Success
-                    if response.status().is_server_error() {
-                         match response.status() {
-                             StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
-                                 backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
-                             },
-                             _ => {
-                                 backend_guard.mark_success(state.health_config.healthy_threshold as usize);
-                             }
-                         }
-                    } else {
-                        backend_guard.mark_success(state.health_config.healthy_threshold as usize);
-                    }
-
-                    let (parts, body) = response.into_parts();
-                    let body = Body::new(body); 
-                    Response::from_parts(parts, body)
-                },
-                Err(e) => {
-                    tracing::error!(
-                        request_id = %request_id,
-                        error = %e,
-                        "Upstream request failed"
-                    );
-                    // Passive Health Check: Failure
-                    backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
-                    
-                    (StatusCode::BAD_GATEWAY, "Upstream request failed").into_response()
-                }
-            }
-        } else {
-            tracing::warn!(
-                request_id = %request_id,
-                backend_group = %route.backend_group,
-                "No available backends in group"
-            );
-            (StatusCode::BAD_GATEWAY, "No healthy backends available").into_response()
+    // 2. Buffer Request Body if retriable
+    // For Phase 5, we only retry idempotent methods if body is small or empty.
+    // If it's a POST/PUT with a large body, we might not want to buffer it.
+    // Let's collect the body for all potentially retriable requests.
+    let (parts, body) = request.into_parts();
+    let body_bytes = if state.retry_config.enabled && method.is_idempotent() {
+        // Limit buffering to avoid OOM (e.g., 1MB)
+        match axum::body::to_bytes(body, 1024 * 1024).await {
+            Ok(bytes) => Some(bytes),
+            Err(_) => None, // Too large or error
         }
     } else {
-        tracing::warn!(
-            request_id = %request_id,
-            path = %path,
-            "No route matched"
-        );
-        (StatusCode::NOT_FOUND, "No matching route found").into_response()
+        None
+    };
+
+    // Record this primary request in the budget
+    state.retry_budget.record_request();
+
+    // 3. Retry Loop
+    let mut attempts = 0;
+    let max_attempts = if state.retry_config.enabled && (body_bytes.is_some() || method == Method::GET || method == Method::HEAD) {
+        state.retry_config.max_attempts
+    } else {
+        1
+    };
+
+    loop {
+        attempts += 1;
+        
+        // Select Backend
+        let backend_guard = match state.backends.get(&route.backend_group) {
+            Some(g) => g,
+            None => {
+                tracing::warn!(request_id = %request_id, group = %route.backend_group, "No healthy backends");
+                return (StatusCode::SERVICE_UNAVAILABLE, "No healthy backends").into_response();
+            }
+        };
+
+        // Construct Request for this attempt
+        let mut req = Request::builder()
+            .method(method.clone())
+            .version(parts.version);
+        
+        // Copy headers
+        if let Some(headers) = req.headers_mut() {
+            for (k, v) in parts.headers.iter() {
+                headers.insert(k.clone(), v.clone());
+            }
+        }
+
+        // URI rewrite
+        let mut uri_parts = parts.uri.clone().into_parts();
+        uri_parts.scheme = Some(Scheme::HTTP);
+        if let Ok(authority) = Authority::from_str(&backend_guard.addr.to_string()) {
+            uri_parts.authority = Some(authority);
+        }
+        let uri = Uri::from_parts(uri_parts).unwrap_or(parts.uri.clone());
+        let req = req.uri(uri)
+            .body(if let Some(ref bytes) = body_bytes {
+                Body::from(bytes.clone())
+            } else {
+                // If we didn't buffer, we can only try once (unless it was already empty)
+                // If this is attempt > 1 and no body_bytes, we should have broken out.
+                Body::empty() 
+            })
+            .unwrap();
+
+        // Forward
+        match state.client.request(req).await {
+            Ok(response) => {
+                let status = response.status();
+                
+                // Check if we should retry
+                if attempts < max_attempts 
+                    && is_retryable(&method, Some(status), false)
+                    && state.retry_budget.can_retry()
+                {
+                    let backoff = calculate_backoff(attempts, state.retry_config.base_delay_ms, state.retry_config.max_delay_ms);
+                    tracing::info!(request_id = %request_id, attempt = attempts, delay = ?backoff, status = %status, "Retrying request");
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+
+                // Passive Health Check update
+                if status.is_server_error() {
+                    match status {
+                        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
+                            backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
+                        }
+                        _ => {
+                            backend_guard.mark_success(state.health_config.healthy_threshold as usize);
+                        }
+                    }
+                } else {
+                    backend_guard.mark_success(state.health_config.healthy_threshold as usize);
+                }
+
+                let (parts, body) = response.into_parts();
+                return Response::from_parts(parts, Body::new(body)).into_response();
+            }
+            Err(e) => {
+                tracing::error!(request_id = %request_id, attempt = attempts, error = %e, "Upstream error");
+                
+                if attempts < max_attempts 
+                    && is_retryable(&method, None, true)
+                    && state.retry_budget.can_retry()
+                {
+                    let backoff = calculate_backoff(attempts, state.retry_config.base_delay_ms, state.retry_config.max_delay_ms);
+                    tracing::info!(request_id = %request_id, attempt = attempts, delay = ?backoff, "Retrying after network error");
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+
+                backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
+                return (StatusCode::BAD_GATEWAY, "Upstream request failed").into_response();
+            }
+        }
     }
 }
 

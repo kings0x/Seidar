@@ -32,6 +32,9 @@ pub struct ProxyConfig {
     /// Rate limiting configuration.
     pub rate_limit: RateLimitConfig,
 
+    /// Retry configuration.
+    pub retries: RetryConfig,
+
     /// Observability settings.
     pub observability: ObservabilityConfig,
 }
@@ -199,6 +202,39 @@ impl Default for RateLimitConfig {
             enabled: false,
             requests_per_second: 100,
             burst_size: 50,
+        }
+    }
+}
+
+/// Retry configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RetryConfig {
+    /// Enable retries.
+    pub enabled: bool,
+
+    /// Maximum number of retry attempts.
+    pub max_attempts: u32,
+
+    /// Base delay for exponential backoff in milliseconds.
+    pub base_delay_ms: u64,
+
+    /// Maximum delay for exponential backoff in milliseconds.
+    pub max_delay_ms: u64,
+
+    /// Percentage of requests that can be retries (retry budget).
+    /// e.g., 0.1 for 10% budget.
+    pub budget_ratio: f32,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_attempts: 3,
+            base_delay_ms: 100,
+            max_delay_ms: 2000,
+            budget_ratio: 0.1,
         }
     }
 }
