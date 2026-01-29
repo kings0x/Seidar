@@ -7,6 +7,7 @@
 //! - Bind server to listener
 //! - Dispatch requests to routing engine
 //! - Forward requests to upstream backends
+//! - Health monitoring (active & passive)
 
 use axum::{
     body::Body,
@@ -31,10 +32,11 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::config::ProxyConfig;
+use crate::config::{ProxyConfig, HealthCheckConfig};
 use crate::http::request::RequestIdLayer;
 use crate::routing::Router as ProxyRouter;
 use crate::load_balancer::pool::BackendManager;
+use crate::health::active::HealthMonitor;
 
 /// Application state injected into handlers.
 #[derive(Clone)]
@@ -42,12 +44,14 @@ pub struct AppState {
     pub router: Arc<ProxyRouter>,
     pub backends: Arc<BackendManager>,
     pub client: Client<HttpConnector, Body>,
+    pub health_config: HealthCheckConfig,
 }
 
 /// HTTP server for the reverse proxy.
 pub struct HttpServer {
     router: Router,
     config: ProxyConfig,
+    backend_manager: Arc<BackendManager>,
 }
 
 impl HttpServer {
@@ -57,36 +61,34 @@ impl HttpServer {
         let proxy_router = Arc::new(ProxyRouter::from_config(config.routes.clone()));
         let backend_manager = Arc::new(BackendManager::new(config.backends.clone()));
         
-        // Initialize HTTP Client (pooling is handled internally)
+        // Initialize HTTP Client
         let client = Client::builder(TokioExecutor::new())
             .build(HttpConnector::new());
 
         let state = AppState {
             router: proxy_router,
-            backends: backend_manager,
+            backends: backend_manager.clone(),
             client,
+            health_config: config.health_check.clone(),
         };
 
         let router = Self::build_router(&config, state);
-        Self { router, config }
+        Self { 
+            router, 
+            config,
+            backend_manager,
+        }
     }
 
     /// Build the Axum router with all middleware layers.
     #[allow(deprecated)]
     fn build_router(config: &ProxyConfig, state: AppState) -> Router {
-        // Build router with middleware
-        // Note: Layer order is bottom-up (last added = outermost)
         Router::new()
-            // Catch-all handler for Phase 3: Dispatch and Proxy
             .route("/{*path}", any(proxy_handler))
             .route("/", any(proxy_handler))
-            // Inject state
             .with_state(state)
-            // Request timeout
             .layer(TimeoutLayer::new(Duration::from_secs(config.timeouts.request_secs)))
-            // Request ID generation
             .layer(RequestIdLayer)
-            // Request tracing
             .layer(TraceLayer::new_for_http())
     }
 
@@ -98,7 +100,18 @@ impl HttpServer {
             "HTTP server starting"
         );
 
-        // Create the router that captures connection info
+        // Spawn Health Monitor (Phase 4)
+        if self.config.health_check.enabled {
+            let monitor = HealthMonitor::new(
+                self.backend_manager.clone(), 
+                self.config.health_check.clone()
+            );
+            tokio::spawn(async move {
+                monitor.run().await;
+            });
+        }
+
+        // Create the router
         let app = self.router.into_make_service_with_connect_info::<SocketAddr>();
 
         // Serve with graceful shutdown
@@ -140,40 +153,20 @@ async fn proxy_handler(
 
     // 1. Match Route
     if let Some(route) = state.router.match_request(&request) {
-        tracing::debug!(
-            request_id = %request_id,
-            route_id = %route.id,
-            backend_group = %route.backend_group,
-            "Route matched"
-        );
-        
         // 2. Select Backend
-        // The guard ensures connection count is decremented when dropped
         if let Some(backend_guard) = state.backends.get(&route.backend_group) {
-            let backend_addr = backend_guard.addr; // Deref to Backend
+            let backend_addr = backend_guard.addr;
             
-            tracing::info!(
-                request_id = %request_id,
-                route_id = %route.id,
-                backend = %backend_addr,
-                "Forwarding request"
-            );
-
             // 3. Rewrite URI
-            // incoming request usually has relative URI (e.g. /api/users)
-            // we need absolute URI for hyper client (http://ip:port/api/users)
             let mut parts = request.uri().clone().into_parts();
-            parts.scheme = Some(Scheme::HTTP); // Phase 3: assume HTTP
+            parts.scheme = Some(Scheme::HTTP); 
             
             if let Ok(authority) = Authority::from_str(&backend_addr.to_string()) {
                 parts.authority = Some(authority);
             } else {
-                tracing::error!("Invalid backend address format: {}", backend_addr);
                 return (StatusCode::BAD_GATEWAY, "Invalid backend address").into_response();
             }
 
-            // Path and query are preserved in 'parts' typically, but clarify:
-            // if parts.path_and_query is None, use "/"
             if parts.path_and_query.is_none() {
                  parts.path_and_query = Some(axum::http::uri::PathAndQuery::from_static("/"));
             }
@@ -185,12 +178,24 @@ async fn proxy_handler(
             }
 
             // 4. Forward Request
-            // Hyper client handles connection pooling automatically
             match state.client.request(request).await {
                 Ok(response) => {
-                    // Convert hyper::Response<Incoming> to axum Response
+                    // Passive Health Check: Success
+                    if response.status().is_server_error() {
+                         match response.status() {
+                             StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
+                                 backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
+                             },
+                             _ => {
+                                 backend_guard.mark_success(state.health_config.healthy_threshold as usize);
+                             }
+                         }
+                    } else {
+                        backend_guard.mark_success(state.health_config.healthy_threshold as usize);
+                    }
+
                     let (parts, body) = response.into_parts();
-                    let body = Body::new(body); // Convert Incoming to Body
+                    let body = Body::new(body); 
                     Response::from_parts(parts, body)
                 },
                 Err(e) => {
@@ -199,10 +204,12 @@ async fn proxy_handler(
                         error = %e,
                         "Upstream request failed"
                     );
+                    // Passive Health Check: Failure
+                    backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);
+                    
                     (StatusCode::BAD_GATEWAY, "Upstream request failed").into_response()
                 }
             }
-            // guard is dropped here, decrementing connection count
         } else {
             tracing::warn!(
                 request_id = %request_id,

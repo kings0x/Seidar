@@ -61,4 +61,12 @@ impl BackendManager {
         }
         None
     }
+
+    /// Return a list of all backends (for health checking).
+    pub fn all_backends(&self) -> Vec<Arc<Backend>> {
+        self.groups.values()
+            .flat_map(|(backends, _)| backends.iter())
+            .cloned()
+            .collect()
+    }
 }

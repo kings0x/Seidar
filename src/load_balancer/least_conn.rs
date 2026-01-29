@@ -21,10 +21,10 @@ impl LoadBalancer for LeastConnections {
             return None;
         }
 
-        // Find backend with minimum connections
-        // In case of tie, the first one is selected (stability)
+        // Find backend with minimum connections among HEALTHY ones
         backends
             .iter()
+            .filter(|b| b.is_healthy())
             .min_by_key(|b| b.active_connections.load(Ordering::Relaxed))
             .cloned()
     }

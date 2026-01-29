@@ -23,9 +23,19 @@ impl LoadBalancer for RoundRobin {
             return None;
         }
 
-        let count = self.counter.fetch_add(1, Ordering::Relaxed);
-        let index = count % backends.len();
-        Some(backends[index].clone())
+        // Phase 4: Filter healthy
+        // Note: Simple loop detection to avoid infinite loop if all unhealthy
+        let start_count = self.counter.fetch_add(1, Ordering::Relaxed);
+        let len = backends.len();
+
+        for i in 0..len {
+            let index = (start_count + i) % len;
+            let backend = &backends[index];
+            if backend.is_healthy() {
+                return Some(backend.clone());
+            }
+        }
+        None
     }
 }
 

@@ -30,4 +30,5 @@ pub use schema::ProxyConfig;
 pub use schema::ListenerConfig;
 pub use schema::RouteConfig;
 pub use schema::BackendConfig;
+pub use schema::HealthCheckConfig;
 
