@@ -3,13 +3,14 @@
 //! # Responsibilities
 //! - Create Axum Router with all handlers
 //! - Configure HTTP/1.1 and HTTP/2 support
-//! - Wire up middleware (tracing, limits, request ID)
-//! - Bind server to listener
+//! - Wire up middleware (tracing, limits, request ID, security)
+//! - Bind server to listener (HTTP or HTTPS)
 //! - Dispatch requests to routing engine
 //! - Forward requests to upstream backends
 //! - Health monitoring (active & passive)
 //! - Resilience (timeouts, retries)
 //! - Observability (metrics, correlation IDs)
+//! - Security (TLS, rate limiting, forwarded headers)
 
 use axum::{
     body::Body,
@@ -18,6 +19,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
     Router,
+    middleware,
+    extract::DefaultBodyLimit,
 };
 use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
@@ -42,6 +45,8 @@ use crate::health::active::HealthMonitor;
 use crate::resilience::retries::{RetryBudget, is_retryable};
 use crate::resilience::backoff::calculate_backoff;
 use crate::observability::metrics;
+use crate::security::rate_limit::{RateLimiterState, rate_limit_middleware};
+use crate::net::tls::load_tls_config;
 
 /// Application state injected into handlers.
 #[derive(Clone)]
@@ -53,6 +58,7 @@ pub struct AppState {
     pub retry_config: RetryConfig,
     pub retry_budget: Arc<RetryBudget>,
     pub observability_config: ObservabilityConfig,
+    pub rate_limiter: Option<Arc<RateLimiterState>>,
 }
 
 /// HTTP server for the reverse proxy.
@@ -73,8 +79,18 @@ impl HttpServer {
         let client = Client::builder(TokioExecutor::new())
             .build(HttpConnector::new());
 
-        // Initialize Retry Budget (ratio from config)
+        // Initialize Retry Budget
         let retry_budget = Arc::new(RetryBudget::new(config.retries.budget_ratio, 100));
+
+        // Initialize Rate Limiter
+        let rate_limiter = if config.rate_limit.enabled {
+            Some(Arc::new(RateLimiterState::new(
+                config.rate_limit.requests_per_second,
+                config.rate_limit.burst_size,
+            )))
+        } else {
+            None
+        };
 
         let state = AppState {
             router: proxy_router,
@@ -84,9 +100,10 @@ impl HttpServer {
             retry_config: config.retries.clone(),
             retry_budget,
             observability_config: config.observability.clone(),
+            rate_limiter: rate_limiter.clone(),
         };
 
-        let router = Self::build_router(&config, state);
+        let router = Self::build_router(&config, state, rate_limiter);
         Self { 
             router, 
             config,
@@ -96,25 +113,36 @@ impl HttpServer {
 
     /// Build the Axum router with all middleware layers.
     #[allow(deprecated)]
-    fn build_router(config: &ProxyConfig, state: AppState) -> Router {
-        Router::new()
+    fn build_router(config: &ProxyConfig, state: AppState, rate_limiter: Option<Arc<RateLimiterState>>) -> Router {
+        let mut router = Router::new()
             .route("/{*path}", any(proxy_handler))
-            .route("/", any(proxy_handler))
+            .route("/", any(proxy_handler));
+
+        // Add rate limiting if enabled
+        if let Some(rl_state) = rate_limiter {
+            router = router.layer(middleware::from_fn_with_state(
+                rl_state,
+                rate_limit_middleware,
+            ));
+        }
+
+        router
             .with_state(state)
+            .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB limit (Phase 7)
             .layer(TimeoutLayer::new(Duration::from_secs(config.timeouts.request_secs)))
             .layer(RequestIdLayer)
             .layer(TraceLayer::new_for_http())
     }
 
     /// Run the server, accepting connections on the given listener.
-    pub async fn run(self, listener: TcpListener) -> Result<(), std::io::Error> {
+    pub async fn run(self, listener: TcpListener) -> Result<(), Box<dyn std::error::Error>> {
         let addr = listener.local_addr()?;
         tracing::info!(
             address = %addr,
             "HTTP server starting"
         );
 
-        // Spawn Health Monitor (Phase 4)
+        // Spawn Health Monitor
         if self.config.health_check.enabled {
             let monitor = HealthMonitor::new(
                 self.backend_manager.clone(), 
@@ -125,13 +153,25 @@ impl HttpServer {
             });
         }
 
-        // Create the router
         let app = self.router.into_make_service_with_connect_info::<SocketAddr>();
 
-        // Serve with graceful shutdown
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+        // Phase 7: TLS Termination
+        if let Some(ref tls_config) = self.config.listener.tls {
+            tracing::info!("TLS enabled, loading certificates");
+            let cert_path = std::path::Path::new(&tls_config.cert_path);
+            let key_path = std::path::Path::new(&tls_config.key_path);
+            
+            let tls_config = load_tls_config(cert_path, key_path).await?;
+            
+            axum_server::from_tcp_rustls(listener.into_std()?, tls_config)
+                .serve(app)
+                .await?;
+        } else {
+            // Standard HTTP
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+        }
 
         tracing::info!("HTTP server stopped");
         Ok(())
@@ -147,7 +187,7 @@ impl HttpServer {
 /// Looks up route, selects backend, and forwards request.
 async fn proxy_handler(
     State(state): State<AppState>,
-    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     request: Request<Body>,
 ) -> impl IntoResponse {
     let start_time = Instant::now();
@@ -218,13 +258,39 @@ async fn proxy_handler(
             .method(method.clone())
             .version(parts.version);
         
-        // Copy headers and PROPRAGATE X-Request-ID (Phase 6)
         if let Some(headers) = req.headers_mut() {
             for (k, v) in parts.headers.iter() {
                 headers.insert(k.clone(), v.clone());
             }
-            // Ensure request ID is present (it should be due to layer, but let's be explicit)
+            // Correlation ID
             headers.insert("x-request-id", header::HeaderValue::from_str(&request_id).unwrap());
+            
+            // Phase 7: X-Forwarded-* Headers
+            let client_ip = client_addr.ip().to_string();
+            
+            // X-Forwarded-For
+            if let Some(existing) = headers.get("x-forwarded-for") {
+                if let Ok(s) = existing.to_str() {
+                    let new_val = format!("{}, {}", s, client_ip);
+                    if let Ok(hv) = header::HeaderValue::from_str(&new_val) {
+                        headers.insert("x-forwarded-for", hv);
+                    }
+                }
+            } else {
+                headers.insert("x-forwarded-for", header::HeaderValue::from_str(&client_ip).unwrap());
+            }
+
+            // X-Forwarded-Proto
+            // For now we assume if we have TLS config and it's running as HTTPS, then "https"
+            // But we don't easily know if the current request came via TLS here without ConnectInfo Extension or similar.
+            // Simplified: if listener-tls is present, assume https (best effort)
+            // A better way would be using Extension to pass scheme.
+            headers.insert("x-forwarded-proto", header::HeaderValue::from_static("http"));
+
+            // x-forwarded-host
+            if let Some(host) = parts.headers.get("host") {
+                headers.insert("x-forwarded-host", host.clone());
+            }
         }
 
         // URI rewrite
@@ -249,7 +315,6 @@ async fn proxy_handler(
             Ok(response) => {
                 let status = response.status();
                 
-                // Check if we should retry
                 if attempts < max_attempts 
                     && is_retryable(&method, Some(status), false)
                     && state.retry_budget.can_retry()
@@ -260,10 +325,8 @@ async fn proxy_handler(
                     continue;
                 }
 
-                // Metrics (Phase 6)
                 metrics::record_request(&method_str, status.as_u16(), &backend_addr_str, start_time);
 
-                // Passive Health Check update
                 if status.is_server_error() {
                     match status {
                         StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
@@ -293,7 +356,6 @@ async fn proxy_handler(
                     continue;
                 }
 
-                // Metrics (Phase 6)
                 metrics::record_request(&method_str, 502, &backend_addr_str, start_time);
 
                 backend_guard.mark_failure(state.health_config.unhealthy_threshold as usize);

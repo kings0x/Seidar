@@ -8,6 +8,7 @@
 //!     → connection.rs (lifecycle tracking, state machine)
 //!     → Hand off to HTTP layer
 //! ```
+//!
 
 pub mod connection;
 pub mod listener;

@@ -28,3 +28,7 @@ rand = "0.8"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 
+# Security
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls-pemfile = "2"
+
