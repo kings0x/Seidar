@@ -20,13 +20,14 @@ use std::sync::Arc;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use tower_http::{
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
 use arc_swap::ArcSwap;
 use tower::Service;
+use axum_server::Handle;
 
 use crate::config::ProxyConfig;
 use crate::http::request::RequestIdLayer;
@@ -129,7 +130,12 @@ impl HttpServer {
     }
 
     /// Run the server, accepting connections on the given listener.
-    pub async fn run(self, listener: TcpListener, mut config_updates: mpsc::UnboundedReceiver<ProxyConfig>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(
+        self, 
+        listener: TcpListener, 
+        mut config_updates: mpsc::UnboundedReceiver<ProxyConfig>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let addr = listener.local_addr()?;
         tracing::info!(
             address = %addr,
@@ -142,12 +148,22 @@ impl HttpServer {
         // Spawn Reloader Task
         let reloader_inner = inner_state.clone();
         let reloader_client = client.clone();
+        let mut reloader_shutdown = shutdown.resubscribe();
         tokio::spawn(async move {
-            while let Some(new_config) = config_updates.recv().await {
-                tracing::info!("Applying new configuration...");
-                let new_inner = Self::build_inner(&new_config, reloader_client.clone());
-                reloader_inner.store(Arc::new(new_inner));
-                tracing::info!("Configuration reload complete");
+            loop {
+                tokio::select! {
+                    Some(new_config) = config_updates.recv() => {
+                        tracing::info!("Applying new configuration...");
+                        let new_inner = Self::build_inner(&new_config, reloader_client.clone());
+                        reloader_inner.store(Arc::new(new_inner));
+                        tracing::info!("Configuration reload complete");
+                    }
+                    _ = reloader_shutdown.recv() => {
+                        tracing::info!("Config reloader received shutdown signal, exiting loop");
+                        break;
+                    }
+                    else => break,
+                }
             }
         });
 
@@ -156,8 +172,9 @@ impl HttpServer {
                 inner_state.load().backends.clone(), 
                 self.config.health_check.clone()
             );
+            let monitor_shutdown = shutdown.resubscribe();
             tokio::spawn(async move {
-                monitor.run().await;
+                monitor.run(monitor_shutdown).await;
             });
         }
 
@@ -186,12 +203,27 @@ impl HttpServer {
             let key_path = std::path::Path::new(&tls_config.key_path);
             let tls_config = load_tls_config(cert_path, key_path).await?;
             
+            let handle = Handle::new();
+            let mut https_shutdown = shutdown.resubscribe();
+            let h = handle.clone();
+            
+            tokio::spawn(async move {
+                let _ = https_shutdown.recv().await;
+                tracing::info!("HTTPS server initiating graceful shutdown");
+                // Deadline for 10 seconds
+                h.graceful_shutdown(Some(Duration::from_secs(10)));
+            });
+
             axum_server::from_tcp_rustls(listener.into_std()?, tls_config)
+                .handle(handle)
                 .serve(app)
                 .await?;
         } else {
             axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown.recv().await;
+                    tracing::info!("HTTP server initiating graceful shutdown");
+                })
                 .await?;
         }
 
@@ -368,11 +400,4 @@ async fn proxy_handler(
             }
         }
     }
-}
-
-async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install Ctrl+C handler");
-    tracing::info!("Shutdown signal received");
 }

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
+use tokio::sync::broadcast;
 use crate::config::HealthCheckConfig;
 use crate::load_balancer::pool::BackendManager;
 use hyper_util::{
@@ -35,7 +36,7 @@ impl HealthMonitor {
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, mut shutdown: broadcast::Receiver<()>) {
         if !self.config.enabled {
             tracing::info!("Active health checks disabled");
             return;
@@ -51,8 +52,15 @@ impl HealthMonitor {
         let mut ticker = time::interval(interval);
         
         loop {
-            ticker.tick().await; 
-            self.check_all().await;
+            tokio::select! {
+                _ = ticker.tick() => {
+                    self.check_all().await;
+                }
+                _ = shutdown.recv() => {
+                    tracing::info!("Health monitor received shutdown signal, exiting loop");
+                    break;
+                }
+            }
         }
     }
 

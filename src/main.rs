@@ -18,6 +18,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::config::loader::load_config;
 use crate::config::watcher::ConfigWatcher;
 use crate::http::HttpServer;
+use crate::lifecycle::Shutdown;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -32,10 +33,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("reverse-proxy v0.1.0 starting");
 
+    // Phase 9: Initialize Shutdown coordinator
+    let shutdown = Shutdown::new();
+
     // Phase 8: Load Configuration from file
     let config_path = Path::new("config.toml");
     
-    // Create a default config if it doesn't exist (for easier first run)
     if !config_path.exists() {
         tracing::warn!("config.toml not found, creating default configuration");
         let default_config = crate::config::ProxyConfig::default();
@@ -84,8 +87,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create and run HTTP server
     let server = HttpServer::new(config);
-    server.run(listener, config_updates).await?;
+    let server_shutdown = shutdown.subscribe();
+    
+    // Spawn signal handler
+    let signal_shutdown = shutdown;
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                tracing::info!("Shutdown signal received (Ctrl+C)");
+                signal_shutdown.trigger();
+            }
+            Err(err) => {
+                tracing::error!("Failed to listen for shutdown signal: {}", err);
+            }
+        }
+    });
 
-    tracing::info!("Shutdown complete");
+    server.run(listener, config_updates, server_shutdown).await?;
+
+    tracing::info!("Graceful shutdown complete. Exiting.");
     Ok(())
 }
