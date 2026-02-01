@@ -90,9 +90,20 @@ impl HealthMonitor {
             
             let healthy = match time::timeout(timeout, response_future).await {
                 Ok(Ok(response)) => {
-                    response.status().is_success()
+                    let success = response.status().is_success();
+                    if !success {
+                        tracing::warn!(addr = %addr, status = %response.status(), "Health check failed: non-success status");
+                    }
+                    success
                 },
-                _ => false,
+                Ok(Err(e)) => {
+                    tracing::warn!(addr = %addr, error = %e, "Health check failed: connection error");
+                    false
+                }
+                Err(_) => {
+                    tracing::warn!(addr = %addr, "Health check failed: timeout");
+                    false
+                },
             };
 
             if healthy {

@@ -32,6 +32,21 @@ pub struct ProxyConfig {
 
     /// Observability settings.
     pub observability: ObservabilityConfig,
+
+    /// Blockchain integration settings.
+    pub blockchain: BlockchainConfig,
+
+    #[serde(default)]
+    pub payments: PaymentConfig,
+
+    #[serde(default)]
+    pub qos: QosConfig,
+
+    #[serde(default)]
+    pub admin: AdminConfig,
+
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 /// Listener configuration.
@@ -254,6 +269,149 @@ impl Default for ObservabilityConfig {
             log_level: "info".to_string(),
             metrics_enabled: true,
             metrics_address: "0.0.0.0:9090".to_string(),
+        }
+    }
+}
+
+/// Admin dashboard configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AdminConfig {
+    /// Enable admin dashboard.
+    pub enabled: bool,
+
+    /// API key for authentication (Bearer token).
+    pub api_key: String,
+
+    /// Admin dashboard bind address.
+    pub bind_address: String,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: "admin-secret-key".to_string(),
+            bind_address: "127.0.0.1:8081".to_string(),
+        }
+    }
+}
+
+/// Blockchain integration configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BlockchainConfig {
+    /// Enable blockchain integration.
+    pub enabled: bool,
+
+    /// JSON-RPC endpoint URL.
+    pub rpc_url: String,
+
+    /// Failover JSON-RPC endpoint URLs.
+    #[serde(default)]
+    pub failover_urls: Vec<String>,
+
+    /// Chain ID (e.g., 1 for Ethereum mainnet, 31337 for local Anvil).
+    pub chain_id: u64,
+
+    /// RPC request timeout in seconds.
+    pub rpc_timeout_secs: u64,
+
+    /// Number of block confirmations required for finality.
+    pub confirmation_blocks: u32,
+
+    /// Gas price multiplier (1.0 = estimated, 1.2 = 20% buffer).
+    pub gas_price_multiplier: f64,
+
+    /// Maximum gas price in gwei (protection against spikes).
+    pub max_gas_price_gwei: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PaymentConfig {
+    /// Enable payment monitoring.
+    pub enabled: bool,
+
+    /// Address of the PaymentProcessor contract.
+    pub contract_address: String,
+
+    /// Polling interval in milliseconds.
+    pub monitor_interval_ms: u64,
+
+    /// Grace period for expired subscriptions in seconds.
+    #[serde(default)]
+    pub grace_period_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct QosConfig {
+    pub tier_1_rps: u64,
+    pub tier_2_rps: u64,
+    pub tier_3_rps: u64,
+    pub tier_1_max_conns: usize,
+    pub tier_2_max_conns: usize,
+    pub tier_3_max_conns: usize,
+}
+
+impl Default for QosConfig {
+    fn default() -> Self {
+        Self {
+            tier_1_rps: 10,
+            tier_2_rps: 100,
+            tier_3_rps: 1000,
+            tier_1_max_conns: 1,
+            tier_2_max_conns: 10,
+            tier_3_max_conns: 1000,
+        }
+    }
+}
+
+impl Default for PaymentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            contract_address: String::new(),
+            monitor_interval_ms: 10000,
+            grace_period_secs: 300, // 5 minutes default grace
+        }
+    }
+}
+
+impl Default for BlockchainConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rpc_url: "http://localhost:8545".to_string(),
+            failover_urls: Vec::new(),
+            chain_id: 1,
+            rpc_timeout_secs: 10,
+            confirmation_blocks: 3,
+            gas_price_multiplier: 1.2,
+            max_gas_price_gwei: 500,
+        }
+    }
+}
+
+/// Security hardening configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SecurityConfig {
+    /// Enable security headers.
+    pub enable_headers: bool,
+    /// Maximum body size in bytes.
+    pub max_body_size: usize,
+    /// Enable strict input validation.
+    pub strict_validation: bool,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            enable_headers: true,
+            max_body_size: 2 * 1024 * 1024, // 2MB
+            strict_validation: true,
         }
     }
 }

@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  proxy:
+    build: .
+    ports:
+      - "8080:8080" # Proxy Port
+      - "8081:8081" # Admin Port
+    volumes:
+      - ./config.toml:/app/config.toml
+      - ./subscriptions.json:/app/subscriptions.json
+    environment:
+      - RUST_LOG=info
+      - RPC_URL=${RPC_URL:-http://localhost:8545}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+    restart: unless-stopped
+    depends_on:
+      - mock-backend
+
+  mock-backend:
+    image: hashicorp/http-echo
+    command: -text="Hello from the backend!"
+    ports:
+      - "5678:5678"
+    restart: always
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    restart: unless-stopped
+
+networks:
+  default:
+    name: reverse-proxy-network

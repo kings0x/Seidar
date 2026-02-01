@@ -1,0 +1,21 @@
+# Foundry artifacts
+/out
+/cache
+/broadcast
+
+# Libraries
+/lib
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+
+# Coverage
+lcov.info
+
+# Gas reports
+gas-report.txt
+
+# Node modules (if using npm dependencies)
+node_modules/

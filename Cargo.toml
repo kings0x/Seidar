@@ -5,21 +5,22 @@ edition = "2021"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
 # HTTP framework
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy", "http1", "http2"] }
 
 # Middleware
 tower = "0.5"
-tower-http = { version = "0.6", features = ["timeout", "limit", "request-id", "util", "trace"] }
+tower-http = { version = "0.6", features = ["timeout", "limit", "request-id", "util", "trace", "set-header"] }
 
 # Request ID
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 # Observability
 tracing = "0.1"
@@ -27,6 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.8"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
+fastrand = "2"
 
 # Security
 axum-server = { version = "0.7", features = ["tls-rustls"] }
@@ -36,5 +38,20 @@ rustls-pemfile = "2"
 toml = "0.8"
 notify = "6"
 arc-swap = "1.7"
+dashmap = "6"
+
+# Blockchain
+alloy = { version = "1", features = ["full"] }
+thiserror = "2"
+url = "2"
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+[dev-dependencies]
+
 
 

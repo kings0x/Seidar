@@ -33,4 +33,6 @@ pub use schema::BackendConfig;
 pub use schema::HealthCheckConfig;
 pub use schema::RetryConfig;
 pub use schema::ObservabilityConfig;
+pub use schema::PaymentConfig;
+pub use schema::QosConfig;
 

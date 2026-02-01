@@ -6,6 +6,7 @@
 //! - Enforce max connection limits
 //! - Track health state (Healthy/Unhealthy)
 
+use url::Url;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -35,6 +36,8 @@ impl From<u8> for HealthState {
 pub struct Backend {
     /// The address of the backend.
     pub addr: SocketAddr,
+    /// Pre-calculated base URL for performance.
+    pub base_url: Url,
     /// Maximum concurrent connections allowed.
     pub max_connections: usize,
     /// Number of currently active connections.
@@ -51,8 +54,10 @@ pub struct Backend {
 impl Backend {
     /// Create a new backend.
     pub fn new(addr: SocketAddr, max_connections: usize) -> Self {
+        let base_url = Url::parse(&format!("http://{}", addr)).unwrap();
         Self {
             addr,
+            base_url,
             max_connections,
             active_connections: AtomicUsize::new(0),
             state: AtomicU8::new(HealthState::Unknown as u8),

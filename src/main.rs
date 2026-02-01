@@ -1,24 +1,13 @@
 //! Rust Production Reverse Proxy (v1)
 
-pub mod config;
-pub mod http;
-pub mod net;
-pub mod routing;
-pub mod health;
-pub mod load_balancer;
-pub mod lifecycle;
-pub mod observability;
-pub mod resilience;
-pub mod security;
-
 use std::path::Path;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::config::loader::load_config;
-use crate::config::watcher::ConfigWatcher;
-use crate::http::HttpServer;
-use crate::lifecycle::Shutdown;
+use reverse_proxy::config::loader::load_config;
+use reverse_proxy::config::watcher::ConfigWatcher;
+use reverse_proxy::http::HttpServer;
+use reverse_proxy::lifecycle::Shutdown;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     if !config_path.exists() {
         tracing::warn!("config.toml not found, creating default configuration");
-        let default_config = crate::config::ProxyConfig::default();
+        let default_config = reverse_proxy::config::ProxyConfig::default();
         let toml_string = toml::to_string_pretty(&default_config)?;
         std::fs::write(config_path, toml_string)?;
     }
@@ -63,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize metrics server (Phase 6)
     if config.observability.metrics_enabled {
         if let Ok(addr) = config.observability.metrics_address.parse() {
-            crate::observability::metrics::init_metrics(addr);
+            reverse_proxy::observability::metrics::init_metrics(addr);
         } else {
             tracing::error!(
                 metrics_address = %config.observability.metrics_address,

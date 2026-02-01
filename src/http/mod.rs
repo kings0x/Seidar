@@ -15,6 +15,7 @@ pub mod request;
 pub mod response;
 pub mod server;
 pub mod websocket;
+pub mod quote;
 
 pub use request::{RequestId, RequestIdExt, RequestIdLayer, X_REQUEST_ID};
 pub use server::HttpServer;

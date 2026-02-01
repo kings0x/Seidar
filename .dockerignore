@@ -1,0 +1,14 @@
+target/
+.git/
+.env
+*.json
+!subscriptions.json.example
+contracts/lib/
+contracts/out/
+sdk/node_modules/
+sdk/ts/dist/
+dist/
+.vscode/
+.idea/
+*.log
+Docker-history.txt

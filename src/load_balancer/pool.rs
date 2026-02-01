@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use crate::config::BackendConfig;
 use crate::load_balancer::{
     LoadBalancer,
@@ -53,11 +54,19 @@ impl BackendManager {
     /// Select a backend for the given group.
     /// Returns a guard that decrements the connection count on drop.
     pub fn get(&self, group_name: &str) -> Option<BackendConnectionGuard> {
-        if let Some((backends, lb)) = self.groups.get(group_name) {
-            if let Some(backend) = lb.next_server(backends) {
-                // Phase 3: Enforce limits
+        if let Some(group) = self.groups.get(group_name) {
+            // `group` is a tuple `(Vec<Arc<Backend>>, Box<dyn LoadBalancer>)`
+            // Access backends via `group.0` and load balancer via `group.1`
+            if let Some(backend) = group.1.next_server(&group.0) {
                 return backend.try_create_guard();
+            } else {
+                tracing::debug!(group = %group_name, backend_count = group.0.len(), "No healthy backends found in group");
+                for b in &group.0 {
+                    tracing::debug!(addr = %b.addr, state = ?b.state.load(Ordering::Relaxed), "Backend status");
+                }
             }
+        } else {
+            tracing::debug!(group = %group_name, "Group not found in BackendManager");
         }
         None
     }

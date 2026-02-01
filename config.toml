@@ -1,0 +1,36 @@
+routes = []
+backends = []
+
+[listener]
+bind_address = "0.0.0.0:8080"
+max_connections = 10000
+
+[health_check]
+enabled = true
+interval_secs = 10
+timeout_secs = 5
+path = "/health"
+unhealthy_threshold = 3
+healthy_threshold = 2
+
+[timeouts]
+connect_secs = 5
+request_secs = 30
+idle_secs = 60
+
+[rate_limit]
+enabled = false
+requests_per_second = 100
+burst_size = 50
+
+[retries]
+enabled = true
+max_attempts = 3
+base_delay_ms = 100
+max_delay_ms = 2000
+budget_ratio = 0.10000000149011612
+
+[observability]
+log_level = "info"
+metrics_enabled = true
+metrics_address = "0.0.0.0:9090"
