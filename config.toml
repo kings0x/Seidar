@@ -1,12 +1,21 @@
-routes = []
-backends = []
+[[routes]]
+name = "demo_route"
+path_prefix = "/"
+backend_group = "demo_group"
+priority = 1
+
+[[backends]]
+name = "demo_backend"
+group = "demo_group"
+address = "127.0.0.1:8081"
+max_connections = 100
 
 [listener]
 bind_address = "0.0.0.0:8080"
 max_connections = 10000
 
 [health_check]
-enabled = true
+enabled = false
 interval_secs = 10
 timeout_secs = 5
 path = "/health"
@@ -19,18 +28,36 @@ request_secs = 30
 idle_secs = 60
 
 [rate_limit]
-enabled = false
-requests_per_second = 100
-burst_size = 50
+enabled = true
+requests_per_second = 5
+burst_size = 2
 
 [retries]
 enabled = true
 max_attempts = 3
 base_delay_ms = 100
 max_delay_ms = 2000
-budget_ratio = 0.10000000149011612
+budget_ratio = 0.1
 
 [observability]
 log_level = "info"
 metrics_enabled = true
 metrics_address = "0.0.0.0:9090"
+
+[admin]
+enabled = true
+address = "0.0.0.0:3001"
+# WARNING: Change this in production! Use a strong, unique key.
+api_key = "CHANGE_ME_IN_PRODUCTION"
+
+[security]
+enable_headers = true
+max_body_size = 2097152
+strict_validation = true
+
+[blockchain]
+enabled = true
+chain_id = 1
+rpc_url = "http://localhost:8545"
+subscription_address = "0x0000000000000000000000000000000000000000"
+payment_token = "0x0000000000000000000000000000000000000000"

@@ -1,1 +1,33 @@
+# Build artifacts
 /target
+
+# Environment files (contain secrets)
+.env
+.env.*
+!.env.example
+
+# TLS certificates and keys
+*.pem
+*.key
+*.crt
+*.p12
+
+# User data
+subscriptions.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local config overrides
+config.local.toml

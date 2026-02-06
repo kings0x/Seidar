@@ -9,7 +9,7 @@ struct Cli {
     #[arg(short, long, default_value = "http://localhost:8081")]
     url: String,
 
-    #[arg(short, long, default_value = "admin-secret-key")]
+    #[arg(short, long, default_value = "CHANGE_ME_IN_PRODUCTION", help = "Admin API key (change in production!)")]
     key: String,
 
     #[command(subcommand)]

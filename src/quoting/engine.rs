@@ -117,15 +117,10 @@ mod tests {
     use alloy::primitives::Address;
 
     fn test_wallet() -> Wallet {
-        // Use a random key for testing
-        // Wallet::from_env relies on env var. 
-        // We can create a constructor for testing or mock it.
-        // Wallet struct has private fields.
-        // We need a test helper or public constructor in Wallet.
-        // Assuming Wallet has `from_private_key`.
-        // Let's assume we can set env var for test.
-        std::env::set_var("PROXY_BLOCKCHAIN_PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"); // Anvil account 0
-        Wallet::from_env(31337).expect("Failed to create wallet")
+        // Use Anvil's well-known test account #0 for deterministic testing
+        // This key is publicly known and should NEVER be used for real funds
+        const TEST_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        Wallet::from_private_key(TEST_KEY, 31337).expect("Failed to create test wallet")
     }
 
     #[tokio::test]

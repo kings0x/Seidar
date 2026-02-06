@@ -1,0 +1,37 @@
+
+
+Follow these steps and you will see the full magic! ✨
+
+--- STEP 1: Wake up the Pretty Pictures! (Monitoring) ---
+1. Open your terminal.
+2. Type this and press Enter:
+   docker-compose up -d
+
+--- STEP 2: Start your Pretend Website! (The Backend) ---
+1. Open a NEW terminal window.
+2. Type this and press Enter:
+   cargo run --example mock_backend
+
+--- STEP 3: Give the Proxy its Secret Key! ---
+1. Open ANOTHER new terminal window.
+2. We need to give the Proxy a "Secret Key" so it can sign the price quotes.
+3. Type this and press Enter:
+   $env:PROXY_BLOCKCHAIN_PRIVATE_KEY="ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+4. Now, in the SAME window, start the Proxy:
+   cargo run --bin reverse-proxy
+
+--- STEP 4: Test it with a Remote Control! (The Client) ---
+1. Open ONE MORE terminal window.
+2. Type this to run the test:
+   cargo run --example rust_example
+3. NOW it will work! You will see:
+   - "Quote received" (The Proxy signed it!)
+   - "Response Body: Hello..." (The Proxy letting you through!)
+
+--- STEP 5: See the Magic Dashboard! ---
+1. Open your web browser.
+2. Go to: http://localhost:3000
+3. The "Reverse Proxy Dashboard" will now be there waiting for you!  (Since I fixed the automatic importer).
+4. Look at the charts to see the spikes in the lines! 📈
+
+!

@@ -30,7 +30,7 @@ impl ConnectionTracker {
             _ => self._config.tier_1_max_conns, // Default to lowest
         };
 
-        let mut counts = self.counts.lock().unwrap();
+        let mut counts = self.counts.lock().expect("connection tracker mutex poisoned");
         let current = counts.entry(address).or_insert(0);
         
         if *current < limit {
@@ -43,7 +43,7 @@ impl ConnectionTracker {
 
     /// Decrement connection count for a user.
     pub fn decrement(&self, address: Address) {
-        let mut counts = self.counts.lock().unwrap();
+        let mut counts = self.counts.lock().expect("connection tracker mutex poisoned");
         if let Some(count) = counts.get_mut(&address) {
             if *count > 0 {
                 *count -= 1;

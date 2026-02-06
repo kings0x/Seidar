@@ -1,29 +1,4 @@
-version: '3.8'
-
 services:
-  proxy:
-    build: .
-    ports:
-      - "8080:8080" # Proxy Port
-      - "8081:8081" # Admin Port
-    volumes:
-      - ./config.toml:/app/config.toml
-      - ./subscriptions.json:/app/subscriptions.json
-    environment:
-      - RUST_LOG=info
-      - RPC_URL=${RPC_URL:-http://localhost:8545}
-      - PRIVATE_KEY=${PRIVATE_KEY}
-    restart: unless-stopped
-    depends_on:
-      - mock-backend
-
-  mock-backend:
-    image: hashicorp/http-echo
-    command: -text="Hello from the backend!"
-    ports:
-      - "5678:5678"
-    restart: always
-
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -37,9 +12,12 @@ services:
     ports:
       - "3000:3000"
     environment:
+      # WARNING: Anonymous admin is only for local development!
+      # Disable these in production or use proper authentication.
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
     restart: unless-stopped
 

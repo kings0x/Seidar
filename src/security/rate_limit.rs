@@ -74,7 +74,7 @@ impl RateLimiterState {
             _ => (self.default_rps, self.default_burst),
         };
 
-        let mut buckets = self.buckets.lock().unwrap();
+        let mut buckets = self.buckets.lock().expect("rate limiter mutex poisoned");
         let bucket = buckets
             .entry(key)
             .or_insert_with(|| TokenBucket::new(burst));

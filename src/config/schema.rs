@@ -291,7 +291,8 @@ impl Default for AdminConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            api_key: "admin-secret-key".to_string(),
+            // WARNING: This is a placeholder! Change this in production.
+            api_key: "CHANGE_ME_IN_PRODUCTION".to_string(),
             bind_address: "127.0.0.1:8081".to_string(),
         }
     }

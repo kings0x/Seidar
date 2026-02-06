@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-privileged user to run the app
-RUN groupadd -r proxy && useradd -r -g proxy proxy
+RUN groupadd -r proxyapp && useradd -r -g proxyapp proxyapp
 
 WORKDIR /app
 
@@ -37,9 +37,9 @@ COPY --from=builder /usr/src/app/target/release/reverse-proxy /app/reverse-proxy
 COPY --from=builder /usr/src/app/config.toml /app/config.toml
 
 # Set ownership to the non-privileged user
-RUN chown -R proxy:proxy /app
+RUN chown -R proxyapp:proxyapp /app
 
-USER proxy
+USER proxyapp
 
 # Expose ports based on default config (8080 for proxy, 8081 for admin)
 EXPOSE 8080
