@@ -1,6 +1,19 @@
 # Seidar
 
-A high-performance, blockchain-enabled reverse proxy built in Rust. Seidar provides enterprise-grade API gateway functionality with built-in subscription management, payment processing, and quality-of-service enforcement.
+> [!WARNING]
+> **Proof of Concept / Active Research**
+> This project is currently in active development and is **not yet production-ready**.
+> Features, APIs, and contracts are subject to breaking changes. Use with caution.
+
+**Seidar** is a high-performance, blockchain-enabled reverse proxy built in Rust, designed to enable **low-friction micropayments** on the [LitVM](https://litvm.com) blockchain.
+
+By leveraging LitVM's ultra-low gas costs, Seidar reimagines API monetization: generic "pay-per-request" models become economically viable, allowing services to charge fractions of a cent without custodial middlemen or payment channels.
+
+## Core Mission
+
+- **Enable True Micropayments**: Utilize LitVM's efficiency to process granular payments on-chain.
+- **Trustless Access Control**: Cryptographically verify subscriptions and one-off payments.
+- **High Performance**: Rust-based proxying with minimal overhead (<1ms validation).
 
 ## Features
 
@@ -123,25 +136,25 @@ path = "/health"
 
 ## Architecture
 
+Seidar sits between your clients and backend services, acting as a payment gateway and access controller.
+
+```mermaid
+graph TD
+    Client[Client / DApp]
+    LitVM[LitVM Blockchain]
+    Seidar[Seidar Proxy]
+    Backend[Your API]
+
+    Client -- "1. Pays (Gas < $0.001)" --> LitVM
+    LitVM -- "2. Emits Payment Event" --> Seidar
+    Seidar -- "3. Verifies Payment" --> Seidar
+    Client -- "4. Request + Proof" --> Seidar
+    Seidar -- "5. Proxied Request" --> Backend
+    Backend -- "6. Response" --> Client
 ```
-                                    ┌─────────────────┐
-                                    │   Prometheus    │
-                                    │   :9090         │
-                                    └────────▲────────┘
-                                             │ metrics
-┌─────────┐      ┌──────────────────────────┴───────────────────────────┐
-│         │      │                     Seidar                           │
-│ Client  │─────▶│  ┌─────────┐  ┌──────────┐  ┌─────────────────────┐ │
-│         │      │  │ Rate    │  │ Access   │  │    Load Balancer    │ │
-└─────────┘      │  │ Limiter │─▶│ Control  │─▶│  ┌───────┐ ┌───────┐│ │
-                 │  └─────────┘  └──────────┘  │  │Backend│ │Backend││ │
-                 │                              │  │  :3000│ │  :3001││ │
-                 │  ┌────────────────────────┐  │  └───────┘ └───────┘│ │
-                 │  │   Quote Engine         │  └─────────────────────┘ │
-                 │  │   (Blockchain Signing) │                          │
-                 │  └────────────────────────┘                          │
-                 └──────────────────────────────────────────────────────┘
-```
+
+### Why LitVM?
+Traditional blockchains (Ethereum Mainnet) are too expensive for micropayments ($5+ gas to send $0.01). Seidar is optimized for **LitVM**, where gas fees are negligible, enabling a direct "Pay-for-Usage" model that doesn't require complex Layer 2 state channels.
 
 ## API Endpoints
 
@@ -224,6 +237,11 @@ src/
 
 MIT License - see [LICENSE](LICENSE) for details.
 
-## Contributing
+## Roadmap & Contributing
 
-Contributions are welcome! Please read our contributing guidelines before submitting PRs.
+We are actively researching:
+- [ ] **Dynamic Pricing**: Adjusting quote prices based on network congestion or server load.
+- [ ] **One-Shot Payments**: Extending `PaymentProcessor` to support non-subscription, single-request payments.
+- [ ] **Client SDKs**: Making it easy for JS/TS frontends to handle the payment flow.
+
+Contributions are welcome! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) (coming soon) or check `DEVELOPMENT_NOTES.md` for internal architecture notes.
