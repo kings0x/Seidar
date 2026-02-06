@@ -31,3 +31,7 @@ Thumbs.db
 
 # Local config overrides
 config.local.toml
+
+# Internal development notes (not for public repo)
+DEVELOPMENT_NOTES.md
+my-how-to.txt
